@@ -1,0 +1,15 @@
+# Tool configuration only; the project is not packaged.
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes: unused imports, undefined names
+    "I",       # import order (isort)
+    "B",       # bugbear: likely bugs
+    "UP",      # pyupgrade: modern syntax for the target version
+    "PT",      # pytest style
+    "SIM",     # simplifications
+]
