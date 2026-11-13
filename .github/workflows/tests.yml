@@ -1,0 +1,93 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# All runs share one user account on the live app (balance, per-user 409 lock),
+# so runs are queued one at a time instead of running in parallel.
+concurrency:
+  group: live-app-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format
+        run: ruff format --check .
+
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HEADLESS: "true"
+      # Optional overrides; empty values fall back to the defaults in framework/config.py.
+      BASE_URL: ${{ vars.BASE_URL }}
+      USER_ID: ${{ secrets.USER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # Google Chrome is preinstalled on ubuntu-latest; Selenium Manager fetches
+      # the matching chromedriver.
+      - run: pip install -r requirements.txt
+
+      - name: Run tests (API + UI)
+        run: pytest --html=reports/report.html
+
+      - name: Test summary
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          path = Path("reports/junit.xml")
+          if not path.exists():
+              print("No JUnit report was produced.")
+              raise SystemExit
+          suite = ET.parse(path).getroot().find("testsuite")
+          rows = []
+          for case in suite.iter("testcase"):
+              name = f"{case.get('classname')}::{case.get('name')}"
+              skipped = case.find("skipped")
+              if case.find("failure") is not None or case.find("error") is not None:
+                  result = "❌ failed"
+              elif skipped is not None and skipped.get("type") == "pytest.xfail":
+                  result = f"⚠️ xfail: {skipped.get('message', '')}"
+              elif skipped is not None:
+                  result = f"⏭️ skipped: {skipped.get('message', '')}"
+              else:
+                  result = "✅ passed"
+              tc = next((p.get("value") for p in case.iter("property")
+                         if p.get("name") == "testcase"), "")
+              rows.append(f"| {tc} | `{name}` | {result} |")
+          print(f"### Tests: {suite.get('tests')} run, {suite.get('failures')} failed, "
+                f"{suite.get('errors')} errors, {suite.get('skipped')} skipped/xfail\n")
+          print("| Test case | Test | Result |\n|---|---|---|")
+          print("\n".join(rows))
+          print("\nFull HTML report with logs and screenshots: **test-report** artifact.")
+          EOF
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: reports/
+          retention-days: 14
